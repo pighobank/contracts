@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.5.0;
+pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/math/SafeMath.sol";
 
 contract PiGHOBank {
-    using SafeMath for uint256;
 
     IERC20 public ghoToken;
     uint256 public constant PENALTY_RATE = 10;
@@ -32,7 +30,7 @@ contract PiGHOBank {
         _;
     }
 
-    constructor(IERC20 _ghoToken) public {
+    constructor(IERC20 _ghoToken) {
         ghoToken = _ghoToken;
     }
 
@@ -41,7 +39,7 @@ contract PiGHOBank {
         require(ghoToken.transferFrom(msg.sender, address(this), _amount), "Transfer failed");
 
         if (_amount >= penalties[msg.sender] && _periods >= 3) {
-            _amount = _amount.add(penalties[msg.sender]);
+            _amount += penalties[msg.sender];
             penalties[msg.sender] = 0;
         }
 
@@ -65,16 +63,16 @@ contract PiGHOBank {
 
         require(_amount <= withdrawableAmount, "Exceeds withdrawable balance");
 
-        if (_amount > withdrawableAmount.sub(userDeposit.emergencyReleaseAmount).mul(90).div(100)) {
-            uint256 remainingAmount = userDeposit.amount.sub(userDeposit.withdrawnAmount).sub(userDeposit.deductedPenalties);
-            uint256 penalty = remainingAmount.mul(PENALTY_RATE).div(100);
+        if (_amount > withdrawableAmount - userDeposit.emergencyReleaseAmount) * 90 / 100) {
+        uint256 remainingAmount = userDeposit.amount - userDeposit.withdrawnAmount - userDeposit.deductedPenalties;
+        uint256 penalty = remainingAmount * PENALTY_RATE / 100;
 
-            penalties[msg.sender] = penalties[msg.sender].add(penalty);
-            userDeposit.deductedPenalties = userDeposit.deductedPenalties.add(penalty);
+        penalties[msg.sender] += penalty;
+        userDeposit.deductedPenalties += penalty;
         }
 
         require(ghoToken.transfer(_recipient, _amount), "Transfer failed");
-        userDeposit.withdrawnAmount = userDeposit.withdrawnAmount.add(_amount);
+        userDeposit.withdrawnAmount += _amount;
 
         emit WithdrawalProcessed(msg.sender, _amount, _recipient);
     }
@@ -88,9 +86,9 @@ contract PiGHOBank {
         Deposit storage userDeposit = deposits[_depositor][_depositIndex];
 
         require(msg.sender == userDeposit.emergencyReleaseSigner, "Only the emergency release signer can call this function");
-        require(userDeposit.amount.sub(userDeposit.withdrawnAmount).sub(userDeposit.deductedPenalties) >= _amount, "Emergency release exceeds remaining amount");
+        require(userDeposit.amount - userDeposit.withdrawnAmount - userDeposit.deductedPenalties >= _amount, "Emergency release exceeds remaining amount");
 
-        userDeposit.emergencyReleaseAmount = userDeposit.emergencyReleaseAmount.add(_amount);
+        userDeposit.emergencyReleaseAmount += _amount;
 
         emit EmergencyReleasePerformed(_depositor, _amount);
     }
@@ -98,13 +96,13 @@ contract PiGHOBank {
     function getWithdrawableAmount(uint256 _depositIndex)
     public view validDepositIndex(msg.sender, _depositIndex) returns (uint256) {
         Deposit storage userDeposit = deposits[msg.sender][_depositIndex];
-        uint256 adjustedDeposit = userDeposit.amount.sub(userDeposit.deductedPenalties);
+        uint256 adjustedDeposit = userDeposit.amount - userDeposit.deductedPenalties;
 
-        uint256 monthlyWithdrawAmount = ((block.timestamp >= userDeposit.depositTimestamp.add(30 days)) ?
-            (block.timestamp.sub(userDeposit.depositTimestamp)).div(30 days).mul(adjustedDeposit).div(userDeposit.periods)
-            : 0);
+        uint256 monthlyWithdrawAmount = ((block.timestamp >= userDeposit.depositTimestamp + 30 days)) ?
+            ((block.timestamp - userDeposit.depositTimestamp) / 30 days) * adjustedDeposit / userDeposit.periods
+            : 0;
 
-        uint256 withdrawableAmount = monthlyWithdrawAmount.add(userDeposit.emergencyReleaseAmount).sub(userDeposit.withdrawnAmount);
+        uint256 withdrawableAmount = monthlyWithdrawAmount + userDeposit.emergencyReleaseAmount - userDeposit.withdrawnAmount;
         return (withdrawableAmount >= adjustedDeposit) ? adjustedDeposit : withdrawableAmount;
     }
 }
