@@ -2,9 +2,13 @@
 pragma solidity ^0.5.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/math/SafeMath.sol";
 
 contract PiGHOBank {
+    using SafeMath for uint256;
+
     IERC20 public ghoToken;
+    uint256 public constant PENALTY_RATE = 10;
 
     struct Deposit {
         uint256 amount;
@@ -17,17 +21,27 @@ contract PiGHOBank {
     }
 
     mapping(address => Deposit[]) public deposits;
+    mapping(address => uint256) public penalties;
+
+    event DepositOccurred(address owner, uint256 amount);
+    event WithdrawalProcessed(address owner, uint256 amount, address recipient);
+    event EmergencyReleasePerformed(address depositor, uint256 amount);
+
+    modifier validDepositIndex(address _user, uint256 _depositIndex) {
+        require(_depositIndex < deposits[_user].length, "Invalid deposit index");
+        _;
+    }
 
     constructor(IERC20 _ghoToken) public {
         ghoToken = _ghoToken;
     }
 
-    function deposit(uint256 _amount, address _emergencyReleaseSigner, uint256 _periods) public {
+    function deposit(uint256 _amount, address _emergencyReleaseSigner, uint256 _periods) external {
         require(_periods > 0, "Periods should be greater than 0");
         require(ghoToken.transferFrom(msg.sender, address(this), _amount), "Transfer failed");
 
         if (_amount >= penalties[msg.sender] && _periods >= 3) {
-            _amount += penalties[msg.sender];
+            _amount = _amount.add(penalties[msg.sender]);
             penalties[msg.sender] = 0;
         }
 
@@ -40,43 +54,57 @@ contract PiGHOBank {
             emergencyReleaseAmount: 0,
             periods: _periods
         }));
+
+        emit DepositOccurred(msg.sender, _amount);
     }
 
-    function withdraw(uint256 _depositIndex, uint256 _amount, address _recipient) public {
-        require(_depositIndex < deposits[msg.sender].length, "Invalid deposit index");
+    function withdraw(uint256 _depositIndex, uint256 _amount, address _recipient)
+    external validDepositIndex(msg.sender, _depositIndex) {
         Deposit storage userDeposit = deposits[msg.sender][_depositIndex];
-        uint256 depositAmountAfterDeductingPenalties = userDeposit.amount - userDeposit.deductedPenalties;
-        uint256 withdrawableBalance = ((block.timestamp - userDeposit.depositTimestamp) / 30 days * depositAmountAfterDeductingPenalties / userDeposit.periods + userDeposit.emergencyReleaseAmount) - userDeposit.withdrawnAmount;
+        uint256 withdrawableAmount = getWithdrawableAmount(_depositIndex);
 
-        if(withdrawableBalance > depositAmountAfterDeductingPenalties) {
-            withdrawableBalance = depositAmountAfterDeductingPenalties;
+        require(_amount <= withdrawableAmount, "Exceeds withdrawable balance");
+
+        if (_amount > withdrawableAmount.mul(90).div(100)) {
+            uint256 remainingAmount = userDeposit.amount.sub(userDeposit.withdrawnAmount).sub(userDeposit.deductedPenalties);
+            uint256 penalty = remainingAmount.mul(PENALTY_RATE).div(100);
+
+            penalties[msg.sender] = penalties[msg.sender].add(penalty);
+            userDeposit.deductedPenalties = userDeposit.deductedPenalties.add(penalty);
         }
-
-        if(_amount > withdrawableAmount * 90 / 100) {
-            uint256 remainingAmount = userDeposit.amount - withdrawableAmount;
-            uint256 penalty = remainingAmount * 10 / 100;
-            penalties[msg.sender] += penalty;
-            userDeposit.deductedPenalties += penalty;
-        }
-
-        require(_amount <= withdrawableBalance, "Exceeds withdrawable balance");
 
         require(ghoToken.transfer(_recipient, _amount), "Transfer failed");
+        userDeposit.withdrawnAmount = userDeposit.withdrawnAmount.add(_amount);
 
-        userDeposit.withdrawnAmount += _amount;
+        emit WithdrawalProcessed(msg.sender, _amount, _recipient);
     }
 
-    function getDepositsCount(address _user) public view returns (uint256) {
+    function getDepositsCount(address _user) external view returns (uint256) {
         return deposits[_user].length;
     }
 
-    function emergencyRelease(address _depositor, uint256 _depositIndex, uint256 _amount) public {
-        require(_depositIndex < deposits[_depositor].length, "Invalid deposit index");
+    function emergencyRelease(address _depositor, uint256 _depositIndex, uint256 _amount)
+    external validDepositIndex(_depositor, _depositIndex) {
         Deposit storage userDeposit = deposits[_depositor][_depositIndex];
 
         require(msg.sender == userDeposit.emergencyReleaseSigner, "Only the emergency release signer can call this function");
-        require(userDeposit.amount - userDeposit.withdrawnAmount >= _amount, "Emergency release exceeds remaining amount");
+        require(userDeposit.amount.sub(userDeposit.withdrawnAmount).sub(userDeposit.deductedPenalties) >= _amount, "Emergency release exceeds remaining amount");
 
-        userDeposit.emergencyReleaseAmount += _amount;
+        userDeposit.emergencyReleaseAmount = userDeposit.emergencyReleaseAmount.add(_amount);
+
+        emit EmergencyReleasePerformed(_depositor, _amount);
+    }
+
+    function getWithdrawableAmount(uint256 _depositIndex)
+    public view validDepositIndex(msg.sender, _depositIndex) returns (uint256) {
+        Deposit storage userDeposit = deposits[msg.sender][_depositIndex];
+        uint256 adjustedDeposit = userDeposit.amount.sub(userDeposit.deductedPenalties);
+
+        uint256 monthlyWithdrawAmount = ((block.timestamp >= userDeposit.depositTimestamp.add(30 days)) ?
+            (block.timestamp.sub(userDeposit.depositTimestamp)).div(30 days).mul(adjustedDeposit).div(userDeposit.periods)
+            : 0);
+
+        uint256 withdrawableAmount = monthlyWithdrawAmount.add(userDeposit.emergencyReleaseAmount).sub(userDeposit.withdrawnAmount);
+        return (withdrawableAmount >= adjustedDeposit) ? adjustedDeposit : withdrawableAmount;
     }
 }
