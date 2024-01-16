@@ -10,6 +10,7 @@ contract PiGHOBank {
         uint256 amount;
         uint256 depositTimestamp;
         uint256 withdrawnAmount;
+        uint256 deductedPenalties;
         address emergencyReleaseSigner;
         uint256 emergencyReleaseAmount;
         uint256 periods;
@@ -24,10 +25,17 @@ contract PiGHOBank {
     function deposit(uint256 _amount, address _emergencyReleaseSigner, uint256 _periods) public {
         require(_periods > 0, "Periods should be greater than 0");
         require(ghoToken.transferFrom(msg.sender, address(this), _amount), "Transfer failed");
+
+        if (_amount >= penalties[msg.sender] && _periods >= 3) {
+            _amount += penalties[msg.sender];
+            penalties[msg.sender] = 0;
+        }
+
         deposits[msg.sender].push(Deposit({
             amount: _amount,
             depositTimestamp: block.timestamp,
             withdrawnAmount: 0,
+            deductedPenalties: 0,
             emergencyReleaseSigner: _emergencyReleaseSigner,
             emergencyReleaseAmount: 0,
             periods: _periods
@@ -37,12 +45,21 @@ contract PiGHOBank {
     function withdraw(uint256 _depositIndex, uint256 _amount, address _recipient) public {
         require(_depositIndex < deposits[msg.sender].length, "Invalid deposit index");
         Deposit storage userDeposit = deposits[msg.sender][_depositIndex];
+        uint256 depositAmountAfterDeductingPenalties = userDeposit.amount - userDeposit.deductedPenalties;
+        uint256 withdrawableBalance = ((block.timestamp - userDeposit.depositTimestamp) / 30 days * depositAmountAfterDeductingPenalties / userDeposit.periods + userDeposit.emergencyReleaseAmount) - userDeposit.withdrawnAmount;
 
-        uint256 monthlyWithdrawAmount = (block.timestamp - userDeposit.depositTimestamp) / 30 days * userDeposit.amount / userDeposit.periods;
+        if(withdrawableBalance > depositAmountAfterDeductingPenalties) {
+            withdrawableBalance = depositAmountAfterDeductingPenalties;
+        }
 
-        require(userDeposit.withdrawnAmount + _amount <= monthlyWithdrawAmount + userDeposit.emergencyReleaseAmount, "Exceeds withdrawal limits");
+        if(_amount > withdrawableAmount * 90 / 100) {
+            uint256 remainingAmount = userDeposit.amount - withdrawableAmount;
+            uint256 penalty = remainingAmount * 10 / 100;
+            penalties[msg.sender] += penalty;
+            userDeposit.deductedPenalties += penalty;
+        }
 
-        require(userDeposit.amount - userDeposit.withdrawnAmount >= _amount, "Withdraw amount exceeds deposited amount");
+        require(_amount <= withdrawableBalance, "Exceeds withdrawable balance");
 
         require(ghoToken.transfer(_recipient, _amount), "Transfer failed");
 
