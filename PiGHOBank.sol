@@ -65,7 +65,7 @@ contract PiGHOBank {
 
         require(_amount <= withdrawableAmount, "Exceeds withdrawable balance");
 
-        if (_amount > withdrawableAmount.mul(90).div(100)) {
+        if (_amount > withdrawableAmount.sub(userDeposit.emergencyReleaseAmount).mul(90).div(100)) {
             uint256 remainingAmount = userDeposit.amount.sub(userDeposit.withdrawnAmount).sub(userDeposit.deductedPenalties);
             uint256 penalty = remainingAmount.mul(PENALTY_RATE).div(100);
 
