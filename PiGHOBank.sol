@@ -31,18 +31,25 @@ contract PiGHOBank {
         ghoToken = _ghoToken;
     }
 
-    function deposit(uint256 _amount, address _emergencyReleaseSigner, uint256 _periods) external {
+    function createDeposit(uint256 _amount, address _emergencyReleaseSigner, uint256 _periods) external {
         require(_periods > 0, "Periods should be greater than 0");
-        require(ghoToken.transferFrom(msg.sender, address(this), _amount), "Transfer failed");
 
         deposits[msg.sender].push(Deposit({
-            amount: _amount,
+            amount: 0,
             depositTimestamp: block.timestamp,
             withdrawnAmount: 0,
             emergencyReleaseSigner: _emergencyReleaseSigner,
             emergencyReleaseAmount: 0,
             periods: _periods
         }));
+
+        addDeposit(deposits[msg.sender].length - 1, _amount);
+    }
+
+    function addDeposit(uint256 _depositIndex, uint256 _amount) public validDepositIndex(msg.sender, _depositIndex) {
+        require(ghoToken.transferFrom(msg.sender, address(this), _amount), "Transfer failed");
+
+        deposits[msg.sender][_depositIndex].amount += _amount;
 
         emit DepositOccurred(msg.sender, _amount);
     }
