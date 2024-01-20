@@ -57,7 +57,7 @@ contract PiGHOBank {
     function withdraw(uint256 _depositIndex, uint256 _amount, address _recipient)
     external validDepositIndex(msg.sender, _depositIndex) {
         Deposit storage userDeposit = deposits[msg.sender][_depositIndex];
-        uint256 withdrawableAmount = getWithdrawableAmount(_depositIndex);
+        uint256 withdrawableAmount = getWithdrawableAmount(msg.sender, _depositIndex);
 
         require(_amount <= withdrawableAmount, "Exceeds withdrawable balance");
 
@@ -80,13 +80,12 @@ contract PiGHOBank {
         require(userDeposit.amount - userDeposit.withdrawnAmount >= _amount, "Emergency release exceeds remaining amount");
 
         userDeposit.emergencyReleaseAmount += _amount;
-
         emit EmergencyReleasePerformed(_depositor, _amount);
     }
 
-    function getWithdrawableAmount(uint256 _depositIndex)
-    public view validDepositIndex(msg.sender, _depositIndex) returns (uint256) {
-        Deposit storage userDeposit = deposits[msg.sender][_depositIndex];
+    function getWithdrawableAmount(address _depositor, uint256 _depositIndex)
+    public view validDepositIndex(_depositor, _depositIndex) returns (uint256) {
+        Deposit storage userDeposit = deposits[_depositor][_depositIndex];
 
         uint256 monthlyWithdrawAmount = ((block.timestamp >= userDeposit.depositTimestamp + 30 days)) ?
             ((block.timestamp - userDeposit.depositTimestamp) / 30 days) * userDeposit.amount / userDeposit.periods
